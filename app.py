@@ -175,9 +175,6 @@ elif menu == "Scan Attendance":
     start_time_cfg = db.get_setting("start_time")
     known_encodings = fu.load_encodings()
     
-    if 'result_queue' not in st.session_state:
-        st.session_state.result_queue = queue.Queue()
-
     if not known_encodings:
         st.warning("No students registered yet. Please register students first.")
     else:
@@ -187,10 +184,10 @@ elif menu == "Scan Attendance":
             st.markdown("### Live Scanner")
             
             class FaceProcessor:
-                def __init__(self, result_queue):
+                def __init__(self):
                     self.known_encodings = known_encodings
                     self.start_time_cfg = start_time_cfg
-                    self.result_queue = result_queue
+                    self.recognized_ids = queue.Queue()
 
                 def recv(self, frame):
                     img = frame.to_ndarray(format="bgr24")
@@ -208,7 +205,7 @@ elif menu == "Scan Attendance":
                         
                         if student_id != "Unknown":
                             cv2.putText(img, "Recognized", (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (88, 166, 255), 2)
-                            self.result_queue.put(student_id)
+                            self.recognized_ids.put(student_id)
                         else:
                             cv2.putText(img, "Unknown", (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 123, 114), 2)
                             
@@ -218,7 +215,7 @@ elif menu == "Scan Attendance":
                 key="face-recognition",
                 mode=WebRtcMode.SENDRECV,
                 rtc_configuration=RTC_CONFIGURATION,
-                video_processor_factory=lambda: FaceProcessor(st.session_state.result_queue),
+                video_processor_factory=FaceProcessor,
                 async_processing=True,
             )
 
@@ -237,13 +234,13 @@ elif menu == "Scan Attendance":
             else:
                 log_placeholder.info("No scans yet today.")
 
-        # Process results from the queue in the main thread
-        while webrtc_ctx.state.playing:
+        # Process results from the processor's queue
+        if webrtc_ctx.video_processor:
             try:
                 while True:
-                    recognized_id = st.session_state.result_queue.get_nowait()
+                    recognized_id = webrtc_ctx.video_processor.recognized_ids.get_nowait()
                     
-                    # Fetch name and dept
+                    # Fetch student info
                     all_students = db.get_all_students()
                     student_row = all_students[all_students['student_id'] == recognized_id]
                     
@@ -251,18 +248,16 @@ elif menu == "Scan Attendance":
                         name = student_row['name'].values[0]
                         dept = student_row['department'].values[0]
                         
-                        # Log attendance
                         now_time = datetime.now().strftime("%H:%M:%S")
                         status = get_status(now_time, start_time_cfg)
                         
                         if db.log_attendance(recognized_id, status):
                             st.toast(f"Attendance Logged: {name}")
                             
-                            # Update Live Log
+                            # Update logs
                             updated_records = db.get_attendance_records().head(10)
                             log_placeholder.dataframe(updated_records[['name', 'time', 'status']], use_container_width=True, hide_index=True)
                             
-                            # Update Info Card
                             with col_info:
                                 info_placeholder.markdown(f"""
                                     <div class='metric-card' style='border-left: 5px solid #238636;'>
@@ -279,8 +274,9 @@ elif menu == "Scan Attendance":
             except queue.Empty:
                 pass
             
-            import time
-            time.sleep(0.1) # Small delay to prevent CPU spike
+            # Automatically refresh to check the queue again
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=2000, key="attendance_refresh")
 
 elif menu == "Attendance Records":
     st.markdown("<div class='title-container'><h1>Attendance Records</h1></div>", unsafe_allow_html=True)

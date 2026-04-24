@@ -5,3 +5,5 @@ numpy
 Pillow
 streamlit-option-menu
 streamlit-webrtc
+av
+streamlit-autorefresh
