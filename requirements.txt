@@ -1,0 +1,7 @@
+streamlit
+opencv-contrib-python
+pandas
+numpy
+Pillow
+streamlit-option-menu
+streamlit-webrtc
